@@ -8,7 +8,7 @@ import random
 from datetime import datetime as dt
 
 # ----------------- Config -----------------
-seed = 41
+seed = 37
 torch.manual_seed(seed)
 np.random.seed(seed)
 random.seed(seed)
@@ -16,7 +16,7 @@ random.seed(seed)
 V = 20              # Vocab size for demo
 epochs = 50
 lr = 0.045 # big lr
-use_gpu = False
+use_gpu = True
 device = 'cuda' if torch.cuda.is_available() & use_gpu else 'cpu'
 print(f"device:{device}")
 # ----------------- Toy dataset -----------------
@@ -70,10 +70,12 @@ class EmbAsLogits(nn.Module):
             torch.set_printoptions(precision=6,edgeitems=3,linewidth=100,sci_mode=False)
             for tokid in token_ids:
                 embed_vect = self.token_embedding_table(tokid)
-                print(f"|{str(tokid.item()).center(10,)}|{embed_vect.detach()[0:3]}...{embed_vect.detach()[-4:-1]}")
+                print(f"|{str(tokid.item()).center(10,)}|{ [round(i.item(), 4) for i in embed_vect.detach()[0:5]]}...{[round(j.item(), 4) for j in embed_vect.detach()[-6:-1]]}")
 
     def forward(self, x):
-        # x: (N,) -> logits: (N, V)
+        # This method is called internally
+        # x is the input vector
+        # logits : a (V,V) matrix
         logits = self.token_embedding_table(x)  # gather rows
         return logits
 
@@ -83,39 +85,52 @@ embedding.printEmbeddingTable()
 
 # before training
 print(f"After initializing the model randomly")
-with torch.no_grad():
+with torch.no_grad(): # Since we do not need gradient calculation here
     final_logits = model(inputs)
     final_pred = final_logits.argmax(dim=1)
     print(f"\n|{'Token ID'.center(10)}|{'PredNext'.center(10)}|{'Target'.center(10)}|")
     print(f"{'__'*16}")
-    for i in range(V):
+    for i in range(V):# show each tokena and current prediction
         print(f"|{str(i).center(10)}|{str(final_pred[i].item()).center(10)}|{str(targets[i].item()).center(10)}|")
 
 optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
 # parameter count
 param_count = sum(p.numel() for p in model.parameters())
-print(f"\nModel : Embedding-as-Logits, parameter count: {param_count:,}  (≈ V*V = {V*V:,})")
+print(f"\nModel : Embedding-as-Logits, parameter count: {param_count:,}  (V*V = {V*V:,})")
 st = dt.now()
 print(f"Training started at {st} for {epochs} epochs")
 # ----------------- Training -----------------
 for epoch in range(1, epochs + 1):
-    model.train()
-    optimizer.zero_grad()
-    logits = model(inputs)  # (V, V)
-    loss = F.cross_entropy(logits, targets)  # softmax+CE
+    model.train() # Swith to the training mode (training and inference modes are different)
+    optimizer.zero_grad() # Clears (= zero) the gradients of model parameters;PyTorch collects gradients by default; we avoid adding to previous gradients.
+    logits = model(inputs)  # (V,V) = model(V) Feeds the input batch through the model.
+    # check notes for more details
+    # https://docs.google.com/presentation/d/1HsCAi6iPwHHEXacjYLqoNXDWHeMLZVeET-QGNP9jVmI/edit?usp=sharing
+    loss = F.cross_entropy(logits, targets)
+    if epoch == epochs:
+        print(f"\nlogits.size:{len(logits.size())}")
+    # Computes gradients of the loss using backpropagation.
+    #G(i,j) = 1/N(P(i,j) - 1(j==ti))
+    # W = W - lr * W.grad
     loss.backward()
     optimizer.step()
     print('.',end='')
     if epoch % 20 == 0 or epoch <= 5:
-        with torch.no_grad():
-            pred = logits.argmax(dim=1)
+        with torch.no_grad():# Temporarily disables gradient computation, for the accuracy calculation
+            pred = logits.argmax(dim=1) # Converts logits to predicted token indices by taking the highest-scoring class along the vocabulary dimension (dim=1).
+            #Resulting pred has the same shape as targets :
             acc = (pred == targets).float().mean().item()
         print(f"\nEpoch {epoch:3d}  loss={loss.item():.6f}  acc={acc*100:5.2f}%",end='')
 
 print(f"\nTraining ended at {dt.now()} time taken {dt.now()-st}")
-embedding.printEmbeddingTable()
-
+embedding.printEmbeddingTable() # Check a row that is correspnding to a token id, it has increased one weight compared to the rest of the weights 
+"""
+|    0     |[-0.002236,  0.102765(*1), -0.003338, -0.001005, -0.017806], 
+|    1     |[-0.010500, -0.000167,  0.091556(*2), -0.005367,  0.005006], 
+|    2     |[ 0.011825, -0.013458, -0.007827,  0.111223(*3),  0.005019],
+|    3     |[-0.006873, -0.005900,  0.012690, -0.019833,  0.096179(*4)], 
+"""
 # After Training
 print(f"Final Model")
 with torch.no_grad():
